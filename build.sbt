@@ -41,6 +41,7 @@ resolvers ++= Seq(
 libraryDependencies ++= {
   val scalazV = "7.1.0"
   Seq(
+    "com.aerospike"     % "aerospike-client"    % "3.0.33",
     "org.scalaz"        %% "scalaz-core"        % scalazV,
     "org.scalaz"        %% "scalaz-concurrent"  % scalazV,
     "org.scalaz.stream" %% "scalaz-stream"      % "0.5a",
@@ -55,9 +56,7 @@ libraryDependencies ++= {
 
 offline := true
 
-scalaVersion := "2.10.4"
-
-crossScalaVersions := Seq("2.10.4", "2.11.2")
+scalaVersion := "2.11.4"
 
 compileOrder := CompileOrder.JavaThenScala
 

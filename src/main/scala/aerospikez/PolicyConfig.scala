@@ -1,6 +1,6 @@
 package aerospikez
 
-import com.aerospike.client.policy.{ RecordExistsAction, GenerationPolicy, WritePolicy, QueryPolicy, Priority }
+import com.aerospike.client.policy._
 import com.aerospike.client.async.{ MaxCommandAction, AsyncClientPolicy }
 
 import com.typesafe.config.{ Config, ConfigFactory }
@@ -139,9 +139,12 @@ object WriteConfig {
     expiration: Int = 0,
     generation: Int = 0,
     maxRetries: Int = 2,
+    sendKey: Boolean = true,
     sleepBetweenRetries: Int = 500,
     priority: Priority = Priority.DEFAULT,
     generationPolicy: GenerationPolicy = GenerationPolicy.NONE,
+    commitLevel: CommitLevel = CommitLevel.COMMIT_MASTER,
+    consistencyLevel: ConsistencyLevel = ConsistencyLevel.CONSISTENCY_ONE,
     recordExistsAction: RecordExistsAction = RecordExistsAction.UPDATE): WriteConfig = {
 
     trySome(ConfigFile.file.getConfig("aerospike.write-policy")).map(c ⇒
@@ -150,6 +153,7 @@ object WriteConfig {
         trySome(c.getInt("write-policy.expiration")).getOrElse(expiration),
         trySome(c.getInt("write-policy.generation")).getOrElse(generation),
         trySome(c.getInt("write-policy.max-retries")).getOrElse(maxRetries),
+        trySome(c.getBoolean("write-policy.send-key")).getOrElse(sendKey),
         trySome(c.getInt("write-policy.sleep-between-retries")).getOrElse(sleepBetweenRetries),
         trySome(c.getString("write-policy.priority")).map {
           parsePriority(_, priority)
@@ -157,6 +161,12 @@ object WriteConfig {
         trySome(c.getString("write-policy.generation-policy")).map {
           parseGenerationPolicy(_, generationPolicy)
         }.getOrElse(generationPolicy),
+        trySome(c.getString("commit-level")).map {
+          parseCommitLevel(_, commitLevel)
+        }.getOrElse(commitLevel),
+        trySome(c.getString("consistency-level")).map {
+          parseConsistencyLevel(_, consistencyLevel)
+        }.getOrElse(consistencyLevel),
         trySome(c.getString("write-policy.record-exists-action")).map {
           parseRecordExistsAction(_, recordExistsAction)
         }.getOrElse(recordExistsAction)
@@ -167,9 +177,12 @@ object WriteConfig {
         expiration,
         generation,
         maxRetries,
+        sendKey,
         sleepBetweenRetries,
         priority,
         generationPolicy,
+        commitLevel,
+        consistencyLevel,
         recordExistsAction
       )
     )
@@ -191,7 +204,6 @@ object WriteConfig {
 
     generationPolicy.toUpperCase match {
       case "NONE"             ⇒ GenerationPolicy.NONE
-      case "DUPLICATE"        ⇒ GenerationPolicy.DUPLICATE
       case "EXPECT_GEN_GT"    ⇒ GenerationPolicy.EXPECT_GEN_GT
       case "EXPECT_GEN_EQUAL" ⇒ GenerationPolicy.EXPECT_GEN_EQUAL
       case _                  ⇒ defaultGenerationPolicy
@@ -208,6 +220,22 @@ object WriteConfig {
       case _         ⇒ defaultPriority
     }
   }
+
+  private[aerospikez] def parseConsistencyLevel(consistencyLevel: String, defaultConsistencyLevel: ConsistencyLevel): ConsistencyLevel = {
+    consistencyLevel.toUpperCase match {
+      case "CONSISTENCY_ALL" ⇒ ConsistencyLevel.CONSISTENCY_ALL
+      case "CONSISTENCY_ONE"  ⇒ ConsistencyLevel.CONSISTENCY_ONE
+      case _         ⇒ defaultConsistencyLevel
+    }
+  }
+
+  private[aerospikez] def parseCommitLevel(commitLevel: String, defaultCommitLevelLevel: CommitLevel): CommitLevel = {
+    commitLevel.toUpperCase match {
+      case "COMMIT_ALL" ⇒ CommitLevel.COMMIT_ALL
+      case "COMMIT_MASTER"  ⇒ CommitLevel.COMMIT_MASTER
+      case _         ⇒ defaultCommitLevelLevel
+    }
+  }
 }
 
 private[aerospikez] class WriteConfig(
@@ -215,9 +243,12 @@ private[aerospikez] class WriteConfig(
     expiration: Int,
     generation: Int,
     maxRetries: Int,
+    sendKey: Boolean,
     sleepBetweenRetries: Int,
     priority: Priority,
     generationPolicy: GenerationPolicy,
+    commitLevel: CommitLevel,
+    consistencyLevel: ConsistencyLevel,
     recordExistsAction: RecordExistsAction) {
 
   private[aerospikez] val policy: WritePolicy = {
@@ -226,10 +257,87 @@ private[aerospikez] class WriteConfig(
     writePolicy.expiration = expiration
     writePolicy.generation = generation
     writePolicy.maxRetries = maxRetries
+    writePolicy.sendKey = sendKey
     writePolicy.recordExistsAction = recordExistsAction
     writePolicy.sleepBetweenRetries = sleepBetweenRetries
     writePolicy.generationPolicy = generationPolicy
+    writePolicy.commitLevel = commitLevel
+    writePolicy.consistencyLevel = consistencyLevel
     writePolicy.priority = priority
     writePolicy
+  }
+}
+
+object BatchConfig {
+
+  def apply(
+             maxConcurrentThreads: Int = 1,
+             timeout: Int = 0,
+             maxRetries: Int = 2,
+             sleepBetweenRetries: Int = 500,
+             priority: Priority = Priority.DEFAULT,
+             consistencyLevel: ConsistencyLevel = ConsistencyLevel.CONSISTENCY_ONE): BatchConfig = {
+
+    trySome(ConfigFile.file.getConfig("aerospike.batch-policy")).map(c ⇒
+      new BatchConfig(
+        trySome(c.getInt("max-concurrent-threads")).getOrElse(timeout),
+        trySome(c.getInt("timeout")).getOrElse(timeout),
+        trySome(c.getInt("max-retries")).getOrElse(maxRetries),
+        trySome(c.getInt("sleep-between-retries")).getOrElse(sleepBetweenRetries),
+        trySome(c.getString("priority")).map {
+          parsePriority(_, priority)
+        }.getOrElse(priority),
+        trySome(c.getString("consistency-level")).map {
+          parseConsistencyLevel(_, consistencyLevel)
+        }.getOrElse(consistencyLevel)
+      )
+    ).getOrElse(
+        new BatchConfig(
+          maxConcurrentThreads,
+          timeout,
+          maxRetries,
+          sleepBetweenRetries,
+          priority,
+          consistencyLevel
+        )
+      )
+  }
+
+  private[aerospikez] def parsePriority(priority: String, defaultPriority: Priority): Priority = {
+    priority.toUpperCase match {
+      case "DEFAULT" ⇒ Priority.DEFAULT
+      case "MEDIUM"  ⇒ Priority.MEDIUM
+      case "HIGH"    ⇒ Priority.HIGH
+      case "LOW"     ⇒ Priority.LOW
+      case _         ⇒ defaultPriority
+    }
+  }
+
+  private[aerospikez] def parseConsistencyLevel(consistencyLevel: String, defaultConsistencyLevel: ConsistencyLevel): ConsistencyLevel = {
+    consistencyLevel.toUpperCase match {
+      case "CONSISTENCY_ALL" ⇒ ConsistencyLevel.CONSISTENCY_ALL
+      case "CONSISTENCY_ONE"  ⇒ ConsistencyLevel.CONSISTENCY_ONE
+      case _         ⇒ defaultConsistencyLevel
+    }
+  }
+}
+
+private[aerospikez] class BatchConfig(
+    maxConcurrentThreads: Int,
+    timeout: Int,
+    maxRetries: Int,
+    sleepBetweenRetries: Int,
+    priority: Priority,
+    consistencyLevel: ConsistencyLevel) {
+
+  private[aerospikez] val policy: BatchPolicy = {
+    val batchPolicy = new BatchPolicy()
+    batchPolicy.timeout = timeout
+    batchPolicy.maxConcurrentThreads = maxConcurrentThreads
+    batchPolicy.maxRetries = maxRetries
+    batchPolicy.sleepBetweenRetries = sleepBetweenRetries
+    batchPolicy.priority = priority
+    batchPolicy.consistencyLevel = consistencyLevel
+    batchPolicy
   }
 }

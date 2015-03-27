@@ -1,8 +1,7 @@
 package aerospikez
 
-import com.aerospike.client.listener.{ RecordArrayListener, ExistsArrayListener, DeleteListener }
+import com.aerospike.client.listener._
 import com.aerospike.client.query.{ IndexType, RecordSet, ResultSet, Filter ⇒ AFilter }
-import com.aerospike.client.listener.{ WriteListener, RecordListener, ExistsListener }
 import com.aerospike.client.{ AerospikeException, Record, Host, Key, Bin ⇒ ABin }
 import com.aerospike.client.policy.{ QueryPolicy, WritePolicy, Policy }
 import com.aerospike.client.task.{ IndexTask, ExecuteTask }
@@ -34,6 +33,7 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
 
   private final val queryPolicy = namespace.queryConfig.policy
   private final val writePolicy = namespace.writeConfig.policy
+  private final val batchPolicy = namespace.batchConfig.policy
 
   private def createStmt(filter: AFilter): Statement = {
 
@@ -71,6 +71,8 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
   def put[K: KRestriction, V: VRestriction](key: K, value: V, bin: String = "")(
     implicit ev: V TypeOf SetV): Task[Unit] = {
 
+    println(" 3==> " + writePolicy.sendKey)
+
     Task.async { register ⇒
       client.put(
         writePolicy,
@@ -86,6 +88,8 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
 
   def put[K: KRestriction, V](key: K, bins: Tuple2[String, V]*)(
     implicit ev: V TypeOf SetV): Task[Unit] = {
+
+    println(" 2==> " + writePolicy.sendKey)
 
     Task.async { register ⇒
       client.put(
@@ -161,7 +165,6 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
         new RecordArrayListener {
           def onSuccess(keys: Array[Key], records: Array[Record]): Unit = {
             lazy val length = keys.length
-
             @annotation.tailrec def go(m: Map[K, V], i: Int): Map[K, V] = {
               lazy val _bin = rec.bins
               lazy val rec = records(i)
@@ -178,6 +181,41 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
             register(\/-(go(Map.empty[K, V], 0)))
           }
           def onFailure(ae: AerospikeException): Unit = register(-\/(ae))
+        },
+        keys.map(parseKey[K](_)),
+        Seq(bin): _*
+      )
+    }
+  }
+
+  def getBatch[K: KRestriction, V](keys: Array[K], bin: String)(
+    implicit ev1: V DefaultTypeTo SetV, ev2: VRestriction[V], ctx: distinct1.type): Task[Map[K, V]] = {
+    Task.async { register ⇒
+      client.get(
+        batchPolicy,
+        new RecordSequenceListener {
+          var m: Map[K, V] = Map.empty[K,V]
+          var idx = 0
+          override def onRecord(key: Key, record: Record) = {
+            idx += 1
+            println(key)
+            println()
+            lazy val length = keys.length
+
+            lazy val _bin = rec.bins
+            lazy val rec = record
+            lazy val userValue = _bin.get(bin)
+
+            if (rec != null && _bin != null && userValue != null)
+              m += (key.userKey.asInstanceOf[K] -> userValue.asInstanceOf[V])
+
+            if(idx == length) register(\/-(m))
+
+          }
+          override def onSuccess(): Unit = {
+
+          }
+          override def onFailure(ae: AerospikeException): Unit = register(-\/(ae))
         },
         keys.map(parseKey[K](_)),
         Seq(bin): _*
@@ -222,6 +260,8 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
 
   def operate[K: KRestriction, V](key: K, operations: Ops*)(
     implicit ev1: V DefaultTypeTo SetV, ev2: VRestriction[V]): Task[Option[V]] = {
+
+    println(" 1==> " + writePolicy.sendKey)
 
     operations.last match {
       case _: touch | _: append | _: put[V] | _: prepend | _: add ⇒
@@ -501,7 +541,7 @@ private[aerospikez] class SetOf[@specialized(Int, Long) SetV](
           else
             throw Cause.Terminated(Cause.End)
         }
-    }
+      }
   }
 
   def queryAggregate[LuaR](filter: AFilter, packageName: String, functionName: String, functionArgs: Any*)(
